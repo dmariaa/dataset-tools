@@ -18,6 +18,11 @@ def create_options(parser):
                                help='File or directory with .BMP files to fix',
                                type=str)
 
+    video_subparser = subparsers.add_parser('video', help='Generate video sequence')
+    video_subparser.add_argument('path',
+                                 help='Path to images folder',
+                                 type=str)
+
 
 def fix_bmp_header(args):
     files_arg = args.files
@@ -41,7 +46,7 @@ def fix_bmp_header(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog='color')
+    parser = argparse.ArgumentParser()
     create_options(parser)
     args = parser.parse_args()
 
