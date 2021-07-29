@@ -56,7 +56,7 @@ class DatasetCommands:
             tfd['session'] = f"{s['date']}-{s['session']}"
             tfd['environment'] = s['environment'].split("/")[0]
             tfd['traffic'] = s['traffic']
-            tfd['weather'] = s['weather']
+            tfd['weather'] = s.get('weather','Not specified')
             tfd['position'] = tfd[['p.x', 'p.y', 'p.z']].values.tolist()
             tfd['orientation'] = tfd[['o.x', 'o.y', 'o.z']].values.tolist()
             tfd['vel_l'] = tfd[['l_vel.x', 'l_vel.y', 'l_vel.z']].values.tolist()
