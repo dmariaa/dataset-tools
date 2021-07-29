@@ -7,6 +7,8 @@ import time
 import numpy as np
 import pandas as pd
 
+import depth_utils
+
 
 class DatasetCommands:
     def __init__(self, path):
@@ -35,6 +37,7 @@ class DatasetCommands:
         ]
 
     def get_sessions(self):
+
         sessions = []
         dataset_dirs = [f.path for f in os.scandir(self.path) if f.is_dir()]
         for d in dataset_dirs:
@@ -63,6 +66,8 @@ class DatasetCommands:
             tfd['vel_a'] = tfd[['a_vel.x', 'a_vel.y', 'a_vel.z']].values.tolist()
             tfd['acc_l'] = tfd[['l_acc.x', 'l_acc.y', 'l_acc.z']].values.tolist()
             tfd['acc_a'] = tfd[['a_acc.x', 'a_acc.y', 'a_acc.z']].values.tolist()
+
+            # tfd['min_depth'], tfd['max_depth'] = np.vectorize(self.get_depth_stats)(tfd['session'], tfd['capture'])
 
             telemetry_data.append(tfd)
 
@@ -130,6 +135,11 @@ class DatasetCommands:
         print(f"\t{output}")
         print(f"---------------------------")
 
+    def get_depth_stats(self, session, frame):
+        depth_header = depth_utils.read_depth_header(os.path.join(self.path, session, f"{frame}.depth.raw"))
+        max_depth = -depth_header['min_val']
+        min_depth = depth_header['max_val']
+        return min_depth, max_depth
 
 def vector_diff(a, b):
     b[0] = b[1]
@@ -163,8 +173,8 @@ def create_options(parser):
                                help="Destination folder, default ./split",
                                default='split')
 
-    video_subparser = subparsers.add_parser('stats', help='Generate stats')
-    video_subparser.add_argument('path',
+    stats_subparser = subparsers.add_parser('stats', help='Generate stats')
+    stats_subparser.add_argument('path',
                                  help='Path to the dataset',
                                  type=str)
 

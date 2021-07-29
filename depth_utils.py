@@ -110,13 +110,21 @@ def convert_to_colormap(file, format, colormap_name):
     image.save(file_data[0] + '.png')
 
 
+def read_depth_header(file):
+    data = np.fromfile(file, dtype='byte', count=28)
+    header = get_header(data)
+    return header
+
+
 def read_depth_file(file):
     data = np.fromfile(file, dtype='byte')
     header = get_header(data)
-    return {
+    depth_file = {
         'header': header,
         'data': get_realdepth_data(data, header) if header["bit_depth"]==16 else get_depth_data(data, header)
     }
+    del data
+    return depth_file
 
 
 def get_header(data):
