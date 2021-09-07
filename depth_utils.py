@@ -85,25 +85,23 @@ def colorize(data, colormap_name='magma', normalize_data=True):
 
 
 def convert_to_colormap(file, format, colormap_name):
-    colormap = cm.get_cmap(colormap_name)
-
     if format == 'ets2':
         depth_data = read_depth_file(file)
         data = depth_data['data']
         size = (depth_data['header']['width'], depth_data['header']['height'])
         data.shape = size
-        imdata = colormap(data)
-        imdata = np.uint8(imdata * 255)
+        data = np.clip(data, 0, 80)         # clipping data to kitti depth range
+        generate_histogram(data, 'test', bins=10)
+        imdata = colorize(1 - data)
     else:
         file_data = get_npy_data(file)
         data = file_data.squeeze()
-        vmax = np.percentile(data, 95)
-        vmin = data.min()
-        # data = mpl.colors.Normalize(vmin=data.min(), vmax=vmax)
-        data = (data - vmin) / (vmax - vmin)
+        generate_histogram(data, 'test', bins=10)
+        # vmax = np.percentile(data, 95)
+        # vmin = data.min()
+        # data = (data - vmin) / (vmax - vmin)
         size = (data.shape[1], data.shape[0])
-        imdata = colormap(data)
-        imdata = np.uint8(imdata * 255)
+        imdata = colorize(1 - data)
 
     image = Image.frombytes('RGBA', size, imdata)
     file_data = os.path.splitext(file)
@@ -128,23 +126,35 @@ def read_depth_file(file):
 
 
 def get_header(data):
-    header = {
-        "magic": bytes(struct.unpack('bb', data[0:2])).decode('utf-8'),
-        "size": struct.unpack('<l', data[2:6])[0],
-        "width": struct.unpack('<l', data[6:10])[0],
-        "height": struct.unpack('<l', data[10:14])[0],
-        "min_val": struct.unpack('<f', data[14:18])[0],
-        "max_val": struct.unpack('<f', data[18:22])[0],
-        "bit_depth": struct.unpack('<h', data[22:24])[0],
-        "offset": struct.unpack('<l', data[24:28])[0]
-    }
+    if len(data) == 3525146:
+        header = {
+            "magic": bytes(struct.unpack('bb', data[0:2])).decode('utf-8'),
+            "size": struct.unpack('<l', data[2:6])[0],
+            "width": struct.unpack('<l', data[6:10])[0],
+            "height": struct.unpack('<l', data[10:14])[0],
+            "min_val": struct.unpack('<f', data[14:18])[0],
+            "max_val": struct.unpack('<f', data[18:22])[0],
+            "offset": struct.unpack('<l', data[22:26])[0],
+            "bit_depth": 24
+        }
+    else:
+        header = {
+            "magic": bytes(struct.unpack('bb', data[0:2])).decode('utf-8'),
+            "size": struct.unpack('<l', data[2:6])[0],
+            "width": struct.unpack('<l', data[6:10])[0],
+            "height": struct.unpack('<l', data[10:14])[0],
+            "min_val": struct.unpack('<f', data[14:18])[0],
+            "max_val": struct.unpack('<f', data[18:22])[0],
+            "bit_depth": struct.unpack('<h', data[22:24])[0],
+            "offset": struct.unpack('<l', data[24:28])[0]
+        }
     return header
 
 
 def get_depth_data(file_data, header):
     data_bytes = header['bit_depth'] // 8
     denorm = pow(2, 24) - 1
-    format = '<%sU' % int((header['size'] - 28) / data_bytes)
+    format = '<%sU' % int((header['size'] - 26) / data_bytes)
     data = np.array(rawutil.unpack(format, file_data[header['offset']:]))
     data = data / denorm
     # data = normalize(data)
@@ -154,9 +164,13 @@ def get_depth_data(file_data, header):
 def get_realdepth_data(file_data, header):
     data_bytes = header['bit_depth'] // 8
     format = '<%se' % int((header['size'] - 28) / data_bytes)
-    data = np.array(rawutil.unpack(format, file_data[header['offset']:]))
-    # data = -data
-    # data = normalize(data)
+    data = -np.array(rawutil.unpack(format, file_data[header['offset']:]))
+
+    position = np.argwhere(np.isnan(data))
+    print(f"Data is NaN in: {position}")
+
+    data[data==0] = -header['min_val'] + 50
+    data[np.isnan(data)] = -header['min_val'] + 50
     return data
 
 
@@ -176,6 +190,9 @@ def compare_depths(file1, file2):
     rmse = math.sqrt(mse)
     return (mse, rmse)
 
+def check_depths(path):
+    pass
+
 
 if __name__ == '__main__':
     parser = options.init_options()
@@ -188,6 +205,8 @@ if __name__ == '__main__':
     elif args.command == 'compare':
         result = compare_depths(args.file1, args.file2)
         print(result)
+    elif args.command == 'check':
+        pass
     else:
         parser.print_help(sys.stdout)
         exit()

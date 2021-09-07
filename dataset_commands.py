@@ -1,4 +1,6 @@
 import argparse
+import datetime
+import glob
 import json
 import os
 import sys
@@ -36,8 +38,20 @@ class DatasetCommands:
             'scale'
         ]
 
-    def get_sessions(self):
+    def check_depth(self):
+        sessions = self.get_sessions()
 
+        for i, s in enumerate(sessions):
+            print(f"processing session {s}")
+            session_folder = os.path.join(self.path, f"{s['date']}-{s['session']}")
+            for fname in glob.glob(os.path.join(session_folder, "*.depth.raw")):
+                f = depth_utils.read_depth_file(fname)
+                data = f['data']
+
+                if np.isnan(np.max(data)) or np.isnan(np.min(data)):
+                    print(f"file {fname} data is NaN")
+
+    def get_sessions(self):
         sessions = []
         dataset_dirs = [f.path for f in os.scandir(self.path) if f.is_dir()]
         for d in dataset_dirs:
@@ -59,7 +73,11 @@ class DatasetCommands:
             tfd['session'] = f"{s['date']}-{s['session']}"
             tfd['environment'] = s['environment'].split("/")[0]
             tfd['traffic'] = s['traffic']
-            tfd['weather'] = s.get('weather','Not specified')
+            d = datetime.datetime.strptime(f"{s['date']} {s['gametime']}", "%Y%m%d %H:%M:%S")
+            tfd['time'] = d
+            tfd['moment'] = "mañana" if d.strftime("%H") in ["06", "07", "08", "09", "10", "11", "12", "13", "14", "15"] \
+                else "tarde" if d.strftime("%H") in ["16", "17", "18", "19", "20"] else "noche"
+            tfd['weather'] = s.get('weather', 'Not specified')
             tfd['position'] = tfd[['p.x', 'p.y', 'p.z']].values.tolist()
             tfd['orientation'] = tfd[['o.x', 'o.y', 'o.z']].values.tolist()
             tfd['vel_l'] = tfd[['l_vel.x', 'l_vel.y', 'l_vel.z']].values.tolist()
@@ -76,6 +94,36 @@ class DatasetCommands:
                                                        telemetry_data['position'].shift(1, fill_value=0))
         return telemetry_data
 
+    def get_training_data(self, data):
+        filtered = data[~((data['session'] == '20210725-000013') & (data['capture'] == 'capture-0000001966'))]  # this frame has an invalid pixel (NaN)
+        filtered = filtered[filtered['session'].str.startswith('202107')]
+        return filtered
+
+    def get_validation_data(self, data):
+        filtered = data[~(data['session'].str.startswith('202107'))]
+        return filtered
+
+    def generate_test_set(self, options):
+        validation_samples = 1000
+        sessions = self.get_sessions()
+        telemetry_data = self.get_telemetry_data(sessions)
+        telemetry_data = self.get_validation_data(telemetry_data)
+        non_static_frames = telemetry_data[telemetry_data['movement_delta'] > 0].sample(frac=1)
+        frames = non_static_frames[:validation_samples]
+        frames = frames[['session', 'capture']]
+        print(f"Generated test set: {frames.shape[0]} samples")
+
+        dest = os.path.join(os.getcwd(), options.dest)
+
+        if not os.path.exists(dest):
+            os.makedirs(dest)
+
+        if options.format == 'list':
+            np.savez_compressed(os.path.join(dest, "test_set"), test=frames.to_numpy())
+        elif options.format == 'files':
+            open(os.path.join(dest, "test_files.txt"), 'w').writelines(
+                frame[0] + os.path.sep + frame[1] + "\n" for frame in frames.to_numpy())
+
     def generate_split(self, options):
         train_samples = options.training if options.training > 0 else 0.98
 
@@ -86,10 +134,11 @@ class DatasetCommands:
 
         sessions = self.get_sessions()
         telemetry_data = self.get_telemetry_data(sessions)
+        telemetry_data = self.get_training_data(telemetry_data)
         non_static_frames = telemetry_data[telemetry_data['movement_delta'] > 0].sample(frac=1)
         non_static_frames = non_static_frames[['session', 'capture']]
 
-        total_frames = non_static_frames.size
+        total_frames = non_static_frames.shape[0]
         val_samples_number = int(total_frames * (1 - train_samples))
         train_samples_number = total_frames - val_samples_number
 
@@ -101,13 +150,16 @@ class DatasetCommands:
         if coincidences.shape[0] > 0:
             raise Exception("Bad split generated, some frames coincide in both sets")
 
+        print(f"Generated split for {options.split}: train {training_frames.shape[0]}, val {val_frames.shape[0]}")
+
         dest = os.path.join(os.getcwd(), options.dest)
 
         if not os.path.exists(dest):
             os.makedirs(dest)
 
         if options.format == 'list':
-            np.savez_compressed(os.path.join(dest, "dataset_split"), train=training_frames.to_numpy(), val=val_frames.to_numpy())
+            np.savez_compressed(os.path.join(dest, "dataset_split"), train=training_frames.to_numpy(),
+                                val=val_frames.to_numpy())
         elif options.format == 'files':
             open(os.path.join(dest, "train_files.txt"), 'w').writelines(
                 frame[0] + os.path.sep + frame[1] + "\n" for frame in training_frames.to_numpy())
@@ -126,6 +178,11 @@ class DatasetCommands:
         output = telemetry_data.groupby(by='environment').size().to_string(header=None).replace("\n", "\n\t")
         print(f"\t{output}")
         print(f"---------------------------")
+        print(f"Hora del día: -------------")
+        output = telemetry_data.groupby(by='moment').size().to_string(header=None) \
+            .replace("\n", "\n\t")
+        print(f"\t{output}")
+        print(f"---------------------------")
         print(f"Niveles de tráfico: -------")
         output = telemetry_data.groupby(by='traffic').size().to_string(header=None).replace("\n", "\n\t")
         print(f"\t{output}")
@@ -135,11 +192,22 @@ class DatasetCommands:
         print(f"\t{output}")
         print(f"---------------------------")
 
+    def get_generate_latex(self):
+        sessions = self.get_sessions()
+        telemetry_data = self.get_telemetry_data(sessions)
+        sorted_data = telemetry_data.groupby(by='session', as_index=False)
+        data = sorted_data.agg({'capture': 'count', 'moment': 'first', 'time': lambda x: x.dt.strftime("%H:%M:%S")[0],
+                                'environment': 'first', 'traffic': 'first', 'weather': 'first'}).sort_values('time')
+        data['size'] = (data['capture'] * 3 + data['capture'] * 2) / 1024
+        print(data[['session', 'size', 'capture', 'moment', 'environment', 'traffic', 'weather']]
+              .style.hide_index().format({'size': '{:.2f} GB'}).to_latex())
+
     def get_depth_stats(self, session, frame):
         depth_header = depth_utils.read_depth_header(os.path.join(self.path, session, f"{frame}.depth.raw"))
         max_depth = -depth_header['min_val']
         min_depth = depth_header['max_val']
         return min_depth, max_depth
+
 
 def vector_diff(a, b):
     b[0] = b[1]
@@ -178,6 +246,24 @@ def create_options(parser):
                                  help='Path to the dataset',
                                  type=str)
 
+    check_depth_subparser = subparsers.add_parser('check-depth', help='Checks depth files for invalid data')
+    check_depth_subparser.add_argument('path',
+                                       help='Path to the dataset',
+                                       type=str)
+
+    generate_test_subparser = subparsers.add_parser('generate-test', help='Generate test set')
+    generate_test_subparser.add_argument('path',
+                                         help='Path to the dataset',
+                                         type=str)
+    generate_test_subparser.add_argument('--format',
+                                         help="Split format to generate, 'list' (default) to generate .npz file, "
+                                              "'files' to generate test_files.txt",
+                                         choices=['list', 'files'],
+                                         default='list')
+    generate_test_subparser.add_argument('--dest',
+                                         help="Destination folder, default ./split",
+                                         default='split')
+
 
 def call_command(options):
     dc = DatasetCommands(options.path)
@@ -185,7 +271,12 @@ def call_command(options):
     if options.command == 'split':
         dc.generate_split(options)
     elif options.command == 'stats':
+        dc.get_generate_latex()
         dc.generate_stats()
+    elif options.command == 'check-depth':
+        dc.check_depth()
+    elif options.command == 'generate-test':
+        dc.generate_test_set(options)
     else:
         parser.print_help(sys.stdout)
         exit()
