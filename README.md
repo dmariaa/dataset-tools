@@ -1,10 +1,10 @@
 # Some useful scripts for the ETS2 Dataset
 
-> :warning: **Highly experimental code**: This code is not meant to be used in production systems, I just build it to 
-> get information and other data needed for my degree final project.
-
 This project contains some python code that manipulates and gets information for the ETS Dataset I built for my degree
 in videogames design and development final project. Use it at your discretion.
+
+> :warning: &nbsp; **Highly experimental code**: This code is not meant to be used in production systems, I just build it to 
+> get information and other data needed for my degree final project.
 
 ## dataset_tools.py
 
