@@ -15,8 +15,8 @@ import options
 
 
 def normalize(data):
-    max = data.max()
-    min = data.min()
+    max = float(data.max())
+    min = float(data.min())
     range = max - min if max != min else 1e10
     return (data - min) / range
 
@@ -74,9 +74,12 @@ def generate_histogram(data, title, bins='auto'):
     plt.show()
 
 
-def colorize(data, colormap_name='magma', normalize_data=True):
-    if normalize_data:
+def colorize(data, colormap_name='magma', normalize_data=True, invert=False):
+    if normalize_data or invert:
         data = normalize(data)
+
+        if invert:
+            data = 1 - data
 
     colormap = cm.get_cmap(colormap_name)
     imdata = colormap(data)
@@ -90,7 +93,7 @@ def convert_to_colormap(file, format, colormap_name):
         data = depth_data['data']
         size = (depth_data['header']['width'], depth_data['header']['height'])
         data.shape = size
-        data = np.clip(data, 0, 80)         # clipping data to kitti depth range
+        data = np.clip(data, 0, 80)  # clipping data to kitti depth range
         generate_histogram(data, 'test', bins=10)
         imdata = colorize(1 - data)
     else:
@@ -119,7 +122,7 @@ def read_depth_file(file):
     header = get_header(data)
     depth_file = {
         'header': header,
-        'data': get_realdepth_data(data, header) if header["bit_depth"]==16 else get_depth_data(data, header)
+        'data': get_realdepth_data(data, header) if header["bit_depth"] == 16 else get_depth_data(data, header)
     }
     del data
     return depth_file
@@ -166,10 +169,10 @@ def get_realdepth_data(file_data, header):
     format = '<%se' % int((header['size'] - 28) / data_bytes)
     data = -np.array(rawutil.unpack(format, file_data[header['offset']:]))
 
-    position = np.argwhere(np.isnan(data))
-    print(f"Data is NaN in: {position}")
+    # position = np.argwhere(np.isnan(data))
+    # print(f"Data is NaN in: {position}")
 
-    data[data==0] = -header['min_val'] + 50
+    data[data == 0] = -header['min_val'] + 50
     data[np.isnan(data)] = -header['min_val'] + 50
     return data
 
@@ -189,6 +192,7 @@ def compare_depths(file1, file2):
     mse = metrics.mean_squared_error(data1, data2)
     rmse = math.sqrt(mse)
     return (mse, rmse)
+
 
 def check_depths(path):
     pass

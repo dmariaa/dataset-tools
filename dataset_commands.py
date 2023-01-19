@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import PIL.Image
 import numpy as np
 import pandas as pd
 
@@ -53,7 +54,7 @@ class DatasetCommands:
 
     def get_sessions(self):
         sessions = []
-        dataset_dirs = [f.path for f in os.scandir(self.path) if f.is_dir()]
+        dataset_dirs = sorted([f.path for f in os.scandir(self.path) if f.is_dir()])
         for d in dataset_dirs:
             if os.path.isfile(f"{d}/session.json"):
                 session_string = open(f"{d}/session.json", "r").read()
@@ -85,6 +86,9 @@ class DatasetCommands:
             tfd['acc_l'] = tfd[['l_acc.x', 'l_acc.y', 'l_acc.z']].values.tolist()
             tfd['acc_a'] = tfd[['a_acc.x', 'a_acc.y', 'a_acc.z']].values.tolist()
 
+            v = tfd.tail(1).index[0]
+            tfd['corner'] = np.logical_or(tfd.index == v, tfd.index == 0)
+
             # tfd['min_depth'], tfd['max_depth'] = np.vectorize(self.get_depth_stats)(tfd['session'], tfd['capture'])
 
             telemetry_data.append(tfd)
@@ -94,10 +98,24 @@ class DatasetCommands:
                                                        telemetry_data['position'].shift(1, fill_value=0))
         return telemetry_data
 
-    def get_training_data(self, data):
-        filtered = data[~((data['session'] == '20210725-000013') & (data['capture'] == 'capture-0000001966'))]  # this frame has an invalid pixel (NaN)
-        filtered = filtered[filtered['session'].str.startswith('202107')]
-        return filtered
+    def get_training_data(self, data, split, static_frames=True, night_frames=False):
+        if split == 'depth':
+            # this frame has an invalid depth pixel (NaN)
+            filtered = data[~((data['session'] == '20210725-000013') & (data['capture'] == 'capture-0000001966'))]
+        elif split == 'sfm':
+            # remove corners
+            filtered = data[~data['corner']]
+
+        # remove static frames
+        if not static_frames:
+            filtered = filtered[filtered['movement_delta'] > 0]
+
+        # remove night frames
+        if not night_frames:
+            filtered = filtered[filtered['moment'] != 'noche']
+
+        # filtered = filtered[filtered['session'].str.startswith('202107')]
+        return filtered.sample(frac=1)[['session', 'capture']]
 
     def get_validation_data(self, data):
         filtered = data[~(data['session'].str.startswith('202107'))]
@@ -125,25 +143,23 @@ class DatasetCommands:
                 frame[0] + os.path.sep + frame[1] + "\n" for frame in frames.to_numpy())
 
     def generate_split(self, options):
-        train_samples = options.training if options.training > 0 else 0.98
+        sessions = self.get_sessions()
+        data = self.get_telemetry_data(sessions)
+        data = self.get_training_data(data, options.split)
 
         if options.split == 'sfm':
             train_samples = 0.99
         elif options.split == 'depth':
-            train_samples = 0.06
+            train_samples = 0.96
+        else:
+            train_samples = options.training
 
-        sessions = self.get_sessions()
-        telemetry_data = self.get_telemetry_data(sessions)
-        telemetry_data = self.get_training_data(telemetry_data)
-        non_static_frames = telemetry_data[telemetry_data['movement_delta'] > 0].sample(frac=1)
-        non_static_frames = non_static_frames[['session', 'capture']]
-
-        total_frames = non_static_frames.shape[0]
+        total_frames = data.shape[0]
         val_samples_number = int(total_frames * (1 - train_samples))
         train_samples_number = total_frames - val_samples_number
 
-        training_frames = non_static_frames.iloc[:-val_samples_number]
-        val_frames = non_static_frames.iloc[-val_samples_number:]
+        training_frames = data.iloc[:-val_samples_number]
+        val_frames = data.iloc[-val_samples_number:]
 
         coincidences = pd.merge(training_frames, val_frames, how='inner', on=['session', 'capture'])
 
@@ -162,9 +178,9 @@ class DatasetCommands:
                                 val=val_frames.to_numpy())
         elif options.format == 'files':
             open(os.path.join(dest, "train_files.txt"), 'w').writelines(
-                frame[0] + os.path.sep + frame[1] + "\n" for frame in training_frames.to_numpy())
+                f"{frame[0]} {int(frame[1][-10:])} l\n" for frame in training_frames.to_numpy())
             open(os.path.join(dest, "val_files.txt"), 'w').writelines(
-                frame[0] + os.path.sep + frame[1] + "\n" for frame in val_frames.to_numpy())
+                f"{frame[0]} {int(frame[1][-10:])} l\n" for frame in val_frames.to_numpy())
 
     def generate_stats(self):
         sessions = self.get_sessions()
@@ -208,6 +224,20 @@ class DatasetCommands:
         min_depth = depth_header['max_val']
         return min_depth, max_depth
 
+    def check_color(self):
+        sessions = self.get_sessions()
+
+        for i, s in enumerate(sessions):
+            print(f"processing session {s}")
+            session_folder = os.path.join(self.path, f"{s['date']}-{s['session']}")
+
+            for fname in glob.glob(os.path.join(session_folder, "*.jpg")):
+                f = PIL.Image.open(fname)
+                data = np.array(f)
+
+                if np.isnan(np.max(data)) or np.isnan(np.min(data)):
+                    print(f"file {fname} data is NaN")
+
 
 def vector_diff(a, b):
     b[0] = b[1]
@@ -225,9 +255,9 @@ def create_options(parser):
                                help='Path to the dataset',
                                type=str)
     fix_subparser.add_argument('--training',
-                               help='Training fraction of samples',
+                               help='Training fraction of samples, use with --split custom',
                                type=float,
-                               default=-1)
+                               default=0.98)
     fix_subparser.add_argument('--split',
                                help='Split to generate, flow for SFM based training, depth for ground-truth depth '
                                     'based training, custom (default) to use --training parameter',
@@ -247,6 +277,11 @@ def create_options(parser):
                                  type=str)
 
     check_depth_subparser = subparsers.add_parser('check-depth', help='Checks depth files for invalid data')
+    check_depth_subparser.add_argument('path',
+                                       help='Path to the dataset',
+                                       type=str)
+
+    check_depth_subparser = subparsers.add_parser('check-color', help='Checks color files for invalid data')
     check_depth_subparser.add_argument('path',
                                        help='Path to the dataset',
                                        type=str)
@@ -275,6 +310,8 @@ def call_command(options):
         dc.generate_stats()
     elif options.command == 'check-depth':
         dc.check_depth()
+    elif options.command == 'check-color':
+        dc.check_color()
     elif options.command == 'generate-test':
         dc.generate_test_set(options)
     else:
